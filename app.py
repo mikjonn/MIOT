@@ -1,107 +1,104 @@
-from uuid import uuid4, UUID
-from fastapi import FastAPI, status
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
+from uuid import UUID, uuid4
 from datetime import datetime
 
 app = FastAPI()
 
-class Project(BaseModel):
+
+class MaintenanceRecord(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    name: str
-    created_at: str
-    eng_name: str
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    equipment_name: str
     description: str
-    engineer: str
+    priority: str
     status: str
+    technician: str
+    department: str
+
+
+class MaintenanceRecordUpdate(BaseModel):
+    equipment_name: str | None = None
+    description: str | None = None
+    priority: str | None = None
+    status: str | None = None
+    technician: str | None = None
+    department: str | None = None
+
+
+records: dict[UUID, MaintenanceRecord] = {}
+
+
+@app.post("/records")
+def create_record(record_data: MaintenanceRecord):
+    record_id = record_data.id
+    records[record_id] = record_data
+    return JSONResponse(record_data.model_dump(mode="json"), status_code=201)
+
+
+@app.get("/records")
+def get_all_records():
+    return list(records.values())
+
+
+@app.get("/records/{record_id}")
+def get_record_by_id(record_id: UUID):
+    exists = record_id in records
     
-    @field_validator('name', 'eng_name', 'description', 'engineer')
-    @classmethod
-    def check_not_empty(cls, v):
-        if not v or v.strip() == "":
-            raise ValueError("Field cannot be empty")
-        return v
-
-class ProjectCreate(BaseModel):
-    eng_name: str
-    description: str
-    engineer: str = "Unassigned"
+    if not exists:
+        raise HTTPException(detail=f"Record with id: {str(record_id)} not found", status_code=404)
     
-    @field_validator('eng_name', 'description')
-    @classmethod
-    def check_not_empty(cls, v):
-        if not v or v.strip() == "":
-            raise ValueError("Field cannot be empty")
-        return v
+    return records[record_id]
 
-projects = []
 
-@app.post("/projects")
-def create_project(project_data: ProjectCreate):
-    for project in projects:
-        if project.eng_name == project_data.eng_name:
-            return JSONResponse(
-                content={"error": "Project with this name already exists"},
-                status_code=status.HTTP_400_BAD_REQUEST
-            )
+@app.put("/records/{record_id}")
+def full_update_record(record_id: UUID, record_data: MaintenanceRecord):
+    exists = record_id in records
     
-    new_project = Project(
-        name=project_data.eng_name,
-        created_at=datetime.now().isoformat(),
-        eng_name=project_data.eng_name,
-        description=project_data.description,
-        engineer=project_data.engineer,
-        status="in-progress"
-    )
+    record_data.id = record_id
+    record_data.updated_at = datetime.now()
     
-    projects.append(new_project)
-    
-    return JSONResponse(
-        content=new_project.model_dump(),
-        status_code=status.HTTP_201_CREATED
-    )
-
-
-@app.get("/projects")
-def get_all_projects():
-    return [project.model_dump() for project in projects]
-
-
-@app.get("/projects/{project_id}")
-def get_project_by_id(project_id: UUID):
-    for project in projects:
-        if project.id == project_id:
-            return project.model_dump()
-    
-    return JSONResponse(
-        content={"error": "its not there"},
-        status_code=status.HTTP_404_NOT_FOUND
-    )
-
-
-@app.get("/projects/search/by-date")
-def get_projects_by_date(start_date: str, end_date: str):
-   
-    try:
-        start = datetime.fromisoformat(start_date)
-        end = datetime.fromisoformat(end_date)
+    if not exists:
+        record_data.created_at = datetime.now()
+        records[record_id] = record_data
         
-        filtered_projects = []
-        for project in projects:
-            project_date = datetime.fromisoformat(project.created_at)
-            if start <= project_date <= end:
-                filtered_projects.append(project.model_dump())
-        
-        if not filtered_projects:
-            return JSONResponse(
-                content={"error": "its not there"},
-                status_code=status.HTTP_404_NOT_FOUND
-            )
-        
-        return filtered_projects
+        return JSONResponse(record_data.model_dump(mode="json"), status_code=201)
     
-    except ValueError:
-        return JSONResponse(
-            content={"error": "Invalid date format. Use ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)"},
-            status_code=status.HTTP_400_BAD_REQUEST
-        )
+    else:
+        record_data.created_at = records[record_id].created_at
+        records[record_id] = record_data
+        return record_data
+
+
+@app.patch("/records/{record_id}")
+def partial_update_record(record_id: UUID, partial_record_data: MaintenanceRecordUpdate):
+    exists = record_id in records
+    
+    if not exists:
+        raise HTTPException(detail=f"Record with id: {str(record_id)} not found", status_code=404)
+    
+    existing_record = records[record_id]
+    
+    update_data = partial_record_data.model_dump(exclude_unset=True)
+    
+    for field, value in update_data.items():
+        setattr(existing_record, field, value)
+    
+    existing_record.updated_at = datetime.now()
+    
+    records[record_id] = existing_record
+    
+    return existing_record
+
+
+@app.delete("/records/{record_id}")
+def delete_record(record_id: UUID):
+    exists = record_id in records
+    
+    if not exists:
+        raise HTTPException(detail=f"Record with id: {str(record_id)} not found", status_code=404)
+    
+    del records[record_id]
+    return Response(status_code=204)
